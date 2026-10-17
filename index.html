@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JSON to Text</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1c1c1a; --muted: #6b6b66;
+    --border: #e2e2dd; --accent: #2f6fde; --accent-text: #ffffff;
+    --error: #c0392b; --ok: #1e8449; --drop: #eef3fd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --text: #ececea; --muted: #9a9a94;
+      --border: #33332f; --accent: #5b8ff0; --accent-text: #0e0e0d;
+      --error: #ef6f61; --ok: #58c27d; --drop: #1c2638;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 900px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 10px; background: var(--panel);
+    padding: 28px 16px; text-align: center; cursor: pointer; transition: background .15s, border-color .15s;
+  }
+  .drop.over { background: var(--drop); border-color: var(--accent); }
+  .drop strong { color: var(--accent); }
+  .drop small { display: block; color: var(--muted); margin-top: 4px; }
+  input[type=file] { display: none; }
+  details { margin: 16px 0; }
+  summary { cursor: pointer; color: var(--muted); }
+  textarea {
+    width: 100%; min-height: 120px; margin-top: 8px; padding: 10px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text);
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical;
+  }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 20px 0 8px; }
+  .bar label { color: var(--muted); }
+  select, button {
+    font: inherit; padding: 7px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .spacer { flex: 1; }
+  #status { min-height: 1.5em; font-size: 14px; color: var(--muted); }
+  #status.error { color: var(--error); }
+  #status.ok { color: var(--ok); }
+  #output { min-height: 260px; background: var(--panel); }
+</style>
+</head>
+<body>
+<main>
+  <h1>JSON to Text</h1>
+  <p class="sub">Upload a JSON file, get readable text, copy it. Everything runs in your browser — nothing is uploaded to a server.</p>
+
+  <label class="drop" id="drop">
+    <strong>Choose a .json file</strong> or drag it here
+    <small id="filename">No file selected</small>
+    <input type="file" id="file" accept=".json,application/json,text/plain">
+  </label>
+
+  <details>
+    <summary>…or paste JSON instead</summary>
+    <textarea id="paste" placeholder='{"name": "Ada", "skills": ["math", "code"]}'></textarea>
+  </details>
+
+  <div class="bar">
+    <label for="format">Output:</label>
+    <select id="format">
+      <option value="readable">Readable text</option>
+      <option value="paths">Flat (one line per value)</option>
+      <option value="pretty">Pretty JSON</option>
+    </select>
+    <span class="spacer"></span>
+    <button id="copy" class="primary" disabled>Copy all</button>
+  </div>
+  <div id="status"></div>
+  <textarea id="output" readonly placeholder="Your converted text will appear here."></textarea>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const fileInput = $('file'), drop = $('drop'), paste = $('paste'),
+        format = $('format'), output = $('output'), copyBtn = $('copy'), status = $('status');
+  let data, hasData = false;
+
+  function setStatus(msg, kind = '') { status.textContent = msg; status.className = kind; }
+
+  // Turns "firstName" / "first_name" into "First name"
+  function label(key) {
+    const s = String(key).replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim().toLowerCase();
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function scalar(v) {
+    if (v === null) return '(empty)';
+    if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+    if (v === '') return '(empty)';
+    return String(v);
+  }
+
+  const isObj = v => v !== null && typeof v === 'object';
+
+  function readable(v, depth = 0) {
+    const pad = '  '.repeat(depth);
+    const lines = [];
+    if (Array.isArray(v)) {
+      if (!v.length) return [pad + '(none)'];
+      v.forEach((item, i) => {
+        if (isObj(item)) {
+          lines.push(`${pad}${i + 1}.`);
+          lines.push(...readable(item, depth + 1));
+        } else {
+          lines.push(`${pad}- ${scalar(item)}`);
+        }
+      });
+    } else if (isObj(v)) {
+      const keys = Object.keys(v);
+      if (!keys.length) return [pad + '(none)'];
+      for (const k of keys) {
+        if (isObj(v[k])) {
+          lines.push(`${pad}${label(k)}:`);
+          lines.push(...readable(v[k], depth + 1));
+        } else {
+          lines.push(`${pad}${label(k)}: ${scalar(v[k])}`);
+        }
+      }
+    } else {
+      lines.push(pad + scalar(v));
+    }
+    return lines;
+  }
+
+  function flat(v, path = '', out = []) {
+    if (isObj(v) && Object.keys(v).length) {
+      for (const k of Object.keys(v)) {
+        const p = Array.isArray(v) ? `${path}[${k}]` : (path ? `${path}.${k}` : k);
+        flat(v[k], p, out);
+      }
+    } else {
+      out.push(`${path || '(root)'}: ${isObj(v) ? '(none)' : scalar(v)}`);
+    }
+    return out;
+  }
+
+  function render() {
+    if (!hasData) { output.value = ''; copyBtn.disabled = true; return; }
+    const f = format.value;
+    output.value = f === 'pretty' ? JSON.stringify(data, null, 2)
+                 : f === 'paths' ? flat(data).join('\n')
+                 : readable(data).join('\n');
+    copyBtn.disabled = false;
+  }
+
+  function load(text, source) {
+    try {
+      data = JSON.parse(text);
+      hasData = true;
+      setStatus(`Converted ${source}.`, 'ok');
+    } catch (e) {
+      hasData = false;
+      setStatus(`That isn't valid JSON: ${e.message}`, 'error');
+    }
+    render();
+  }
+
+  function readFile(file) {
+    if (!file) return;
+    $('filename').textContent = file.name;
+    file.text().then(t => load(t, file.name));
+  }
+
+  fileInput.addEventListener('change', () => readFile(fileInput.files[0]));
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => readFile(e.dataTransfer.files[0]));
+
+  let pasteTimer;
+  paste.addEventListener('input', () => {
+    clearTimeout(pasteTimer);
+    pasteTimer = setTimeout(() => {
+      if (paste.value.trim()) load(paste.value, 'pasted JSON');
+      else { hasData = false; setStatus(''); render(); }
+    }, 300);
+  });
+
+  format.addEventListener('change', render);
+
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(output.value);
+    } catch {
+      // Fallback for pages opened via file:// or older browsers
+      output.select();
+      document.execCommand('copy');
+      window.getSelection().removeAllRanges();
+    }
+    const old = copyBtn.textContent;
+    copyBtn.textContent = 'Copied ✓';
+    setTimeout(() => copyBtn.textContent = old, 1500);
+  });
+</script>
+</body>
+</html>
